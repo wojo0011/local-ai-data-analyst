@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Local AI Data Analyst: analyze CSV data entirely in the browser with DuckDB-Wasm, Transformers.js, WebLLM, D3 and Apache ECharts.">
+  <meta name="theme-color" content="#252525">
+  <title>Local AI Data Analyst | Wojciech Matwiejczyk</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&family=Teko:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <script>
+    try {
+      const query = new URLSearchParams(location.search).get('mode');
+      const stored = localStorage.getItem('vis_mode');
+      const mode = query === 'light' || query === 'dark' ? query : (stored === 'light' || stored === 'dark' ? stored : 'dark');
+      document.documentElement.dataset.theme = mode;
+      localStorage.setItem('vis_mode', mode);
+    } catch {}
+  </script>
+
+  <link rel="stylesheet" href="https://wojtekmatwiejczyk.ca/site-loader.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.1/dist/katex.min.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://wojtekmatwiejczyk.ca/portfolio-footer.css">
+
+  <script src="https://wojtekmatwiejczyk.ca/site-loader.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.18.1/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.18.1/dist/contrib/auto-render.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
+  <script type="module" src="app.js"></script>
+  <script defer src="https://wojtekmatwiejczyk.ca/portfolio-footer.js" data-wm-universal-footer="true"></script>
+</head>
+<body>
+  <div id="site-loader" class="site-loader" role="status" aria-live="polite">
+    <div class="site-loader__inner">
+      <div class="site-loader__visual">
+        <svg class="site-loader__brain" viewBox="0 0 320 220" aria-hidden="true">
+          <g id="site-loader-links"></g>
+          <g id="site-loader-active-links"></g>
+          <g id="site-loader-pulses"></g>
+          <g id="site-loader-nodes"></g>
+        </svg>
+      </div>
+      <div class="site-loader__eyebrow">Local Intelligence</div>
+      <div class="site-loader__title">Building Data Analyst</div>
+      <div class="site-loader__status-row">
+        <span id="site-loader-status">Preparing browser runtimes</span>
+        <span class="site-loader__percent" id="site-loader-percent">4%</span>
+      </div>
+      <div class="site-loader__track"><span class="site-loader__progress" id="site-loader-progress"></span></div>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="wrap topbar__inner">
+      <a class="brand" href="https://wojtekmatwiejczyk.ca/" aria-label="Back to portfolio">
+        <span class="brand__mark">WM</span>
+        <span><strong>Local AI Data Analyst</strong><small>CSV → SQL → statistics → local AI → visualization</small></span>
+      </a>
+      <div class="topbar__actions">
+        <span class="privacy-pill"><span class="status-dot status-dot--ok"></span>CSV stays local</span>
+        <button class="icon-button" id="theme-toggle" type="button" aria-label="Switch light or dark mode" title="Switch theme">◐</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap hero__grid">
+        <div class="hero__copy">
+          <span class="eyebrow">Browser-native analytics · no application server</span>
+          <h1>Turn a CSV into a <span>local AI analyst.</span></h1>
+          <p>Upload data, query it with DuckDB-Wasm, inspect the statistics behind the conclusions, find semantically relevant columns with Transformers.js, ask a WebLLM model for interpretation, and visualize the evidence with ECharts.</p>
+          <div class="hero__actions">
+            <button class="primary-button" id="load-demo" type="button">Load demo dataset</button>
+            <button class="secondary-button" id="jump-upload" type="button">Use my CSV</button>
+          </div>
+          <p class="hero__microcopy"><strong>Privacy model:</strong> your dataset is processed in browser memory. Optional AI model files are downloaded from their public hosts; this app does not upload your CSV to an analysis API.</p>
+        </div>
+        <div class="hero__visual panel panel--graph">
+          <div class="panel__header compact">
+            <div><span class="kicker">Architecture</span><h2>Deterministic first. AI second.</h2></div>
+          </div>
+          <svg id="pipeline-graph" role="img" aria-label="Data pipeline from CSV to DuckDB, Transformers, WebLLM and charts"></svg>
+          <div class="runtime-grid" aria-label="Runtime status">
+            <div><span>DuckDB</span><strong id="duck-status">Starting…</strong></div>
+            <div><span>WebGPU</span><strong id="gpu-status">Checking…</strong></div>
+            <div><span>Embeddings</span><strong id="embedding-status">On demand</strong></div>
+            <div><span>WebLLM</span><strong id="llm-status">On demand</strong></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="workspace" id="workspace">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><span class="kicker">01 · Data workspace</span><h2>Bring your own CSV</h2></div>
+          <p>The deterministic layer comes first. DuckDB parses and types the data before any AI model sees a summarized context.</p>
+        </div>
+
+        <div class="workspace-grid">
+          <article class="panel upload-panel" id="upload-panel">
+            <div class="panel__header"><div><span class="panel-number">01A</span><h3>Load data</h3></div><span class="badge">local file</span></div>
+            <label class="dropzone" id="dropzone" for="csv-file">
+              <input id="csv-file" type="file" accept=".csv,text/csv" hidden>
+              <strong>Drop CSV here</strong>
+              <span>or click to choose a file</span>
+              <small>Recommended demo size: under ~100 MB. Browser memory limits still apply.</small>
+            </label>
+            <div class="or-row"><span>or paste CSV text</span></div>
+            <textarea id="csv-paste" class="code-input small" spellcheck="false" placeholder="date,channel,revenue&#10;2026-01-01,Online,125000"></textarea>
+            <button class="secondary-button full" id="load-paste" type="button">Load pasted CSV</button>
+            <p class="status-line" id="data-status">No dataset loaded yet.</p>
+          </article>
+
+          <article class="panel dataset-panel">
+            <div class="panel__header"><div><span class="panel-number">01B</span><h3>Dataset profile</h3></div><span class="badge" id="dataset-name">waiting</span></div>
+            <div class="metric-grid" id="dataset-metrics">
+              <div class="metric"><span>Rows</span><strong>—</strong><small>observations</small></div>
+              <div class="metric"><span>Columns</span><strong>—</strong><small>variables</small></div>
+              <div class="metric"><span>Numeric</span><strong>—</strong><small>quantitative</small></div>
+              <div class="metric"><span>Missing</span><strong>—</strong><small>cells</small></div>
+            </div>
+            <div class="schema-list" id="schema-list"><p class="empty-state">Load data to inspect inferred types, completeness, cardinality and example values.</p></div>
+          </article>
+        </div>
+
+        <article class="panel preview-panel">
+          <div class="panel__header"><div><span class="panel-number">01C</span><h3>Data preview</h3></div><span class="badge">first 50 rows</span></div>
+          <div class="table-wrap"><table id="preview-table"><tbody><tr><td class="empty-cell">Dataset preview appears here.</td></tr></tbody></table></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="sql-section section-band">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><span class="kicker">02 · SQL analyst</span><h2>Ask the data deterministically</h2></div>
+          <p>SQL is the evidence layer. AI can explain results later, but the numbers should come from reproducible queries.</p>
+        </div>
+        <div class="split-grid">
+          <article class="panel">
+            <div class="panel__header"><div><span class="panel-number">02A</span><h3>DuckDB SQL</h3></div><span class="badge" id="query-time">ready</span></div>
+            <div class="quick-actions">
+              <button type="button" data-sql-template="preview">Preview</button>
+              <button type="button" data-sql-template="missing">Missingness</button>
+              <button type="button" data-sql-template="numeric">Numeric summary</button>
+            </div>
+            <textarea id="sql-editor" class="code-input sql-editor" spellcheck="false">SELECT * FROM data LIMIT 25;</textarea>
+            <button class="primary-button full" id="run-sql" type="button">Run query</button>
+            <p class="status-line" id="sql-status">Load a dataset, then execute SQL locally in DuckDB-Wasm.</p>
+          </article>
+          <article class="panel result-panel">
+            <div class="panel__header"><div><span class="panel-number">02B</span><h3>Query result</h3></div><span class="badge">Arrow table</span></div>
+            <div class="table-wrap result-table-wrap"><table id="sql-table"><tbody><tr><td class="empty-cell">Query results appear here.</td></tr></tbody></table></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="statistics-section">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><span class="kicker">03 · Mathematics & statistics</span><h2>Show the math behind the claim</h2></div>
+          <p>Statistics compresses a dataset into evidence. Each metric below includes the equation, interpretation, and the assumptions you should challenge.</p>
+        </div>
+        <div class="selector-row">
+          <label>Primary numeric variable<select id="stats-column"><option value="">Load data first</option></select></label>
+          <label>Compare with<select id="compare-column"><option value="">Load data first</option></select></label>
+        </div>
+        <div class="stats-grid" id="stats-grid">
+          <article class="panel math-card"><span class="math-label">Mean</span><div class="math-formula">\(\bar{x}=\frac{1}{n}\sum_{i=1}^{n}x_i\)</div><strong id="stat-mean">—</strong><p>The arithmetic centre. Sensitive to extreme values.</p></article>
+          <article class="panel math-card"><span class="math-label">Sample standard deviation</span><div class="math-formula">\(s=\sqrt{\frac{\sum (x_i-\bar{x})^2}{n-1}}\)</div><strong id="stat-sd">—</strong><p>Typical spread around the sample mean, using Bessel's correction.</p></article>
+          <article class="panel math-card"><span class="math-label">Median</span><div class="math-formula">\(\tilde{x}=Q_{0.5}\)</div><strong id="stat-median">—</strong><p>A robust centre: half the observations lie above and half below.</p></article>
+          <article class="panel math-card"><span class="math-label">IQR outlier rule</span><div class="math-formula">\([Q_1-1.5IQR,\;Q_3+1.5IQR]\)</div><strong id="stat-outliers">—</strong><p>A diagnostic flag, not proof that an observation is wrong.</p></article>
+          <article class="panel math-card"><span class="math-label">Pearson correlation</span><div class="math-formula">\(r=\frac{\operatorname{cov}(X,Y)}{s_Xs_Y}\)</div><strong id="stat-correlation">—</strong><p>Linear association from -1 to +1. Correlation is not causation.</p></article>
+          <article class="panel math-card"><span class="math-label">OLS regression</span><div class="math-formula">\(\hat{y}=\beta_0+\beta_1x\)</div><strong id="stat-regression">—</strong><p>Fits the line minimizing squared residuals; R² reports explained sample variance.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="visualization-section section-band">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><span class="kicker">04 · Visual analysis</span><h2>Look for shape before story</h2></div>
+          <p>Charts help detect nonlinearity, skew, clusters, seasonality and outliers that a single summary statistic can hide.</p>
+        </div>
+        <div class="chart-controls panel">
+          <label>Chart type<select id="chart-type"><option value="scatter">Scatter</option><option value="line">Line</option><option value="bar">Grouped bar</option><option value="histogram">Histogram</option></select></label>
+          <label>X / category<select id="chart-x"><option value="">Load data first</option></select></label>
+          <label>Y / measure<select id="chart-y"><option value="">Load data first</option></select></label>
+          <button class="secondary-button" id="render-chart" type="button">Render chart</button>
+        </div>
+        <article class="panel chart-panel"><div id="main-chart" role="img" aria-label="Interactive data visualization"></div></article>
+      </div>
+    </section>
+
+    <section class="ai-section">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><span class="kicker">05 · Local AI layers</span><h2>AI helps navigate. SQL keeps it honest.</h2></div>
+          <p>Two optional models run locally: embeddings help map a question to relevant columns; WebLLM interprets a compact evidence context instead of receiving the entire raw table.</p>
+        </div>
+        <div class="split-grid">
+          <article class="panel">
+            <div class="panel__header"><div><span class="panel-number">05A</span><h3>Semantic schema search</h3></div><span class="badge">Transformers.js</span></div>
+            <p class="panel-copy">Example: “Which fields can explain returns?” Embeddings convert the question and column descriptions into vectors, then cosine similarity ranks the closest schema concepts.</p>
+            <div class="math-formula math-inline">\(\cos(\theta)=\frac{\mathbf{q}\cdot\mathbf{c}}{\lVert\mathbf{q}\rVert\lVert\mathbf{c}\rVert}\)</div>
+            <textarea id="semantic-question" class="code-input small" placeholder="Which columns might explain return rate?"></textarea>
+            <div class="button-row"><button class="secondary-button" id="load-embeddings" type="button">Load embedding model</button><button class="primary-button" id="semantic-search" type="button">Find relevant columns</button></div>
+            <div id="semantic-results" class="semantic-results"><p class="empty-state">Embedding results appear here.</p></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel__header"><div><span class="panel-number">05B</span><h3>Local AI analyst</h3></div><span class="badge">WebLLM · WebGPU</span></div>
+            <p class="panel-copy">The model receives schema, computed summaries, recent SQL output and a small row sample. It is instructed to distinguish evidence from hypotheses and never invent unavailable numbers.</p>
+            <label class="field-label">Model<select id="llm-model"><option value="SmolLM2-360M-Instruct-q4f32_1-MLC">SmolLM2 360M · lightweight</option><option value="Llama-3.2-1B-Instruct-q4f32_1-MLC">Llama 3.2 1B · larger</option></select></label>
+            <button class="secondary-button full" id="load-llm" type="button">Load local model</button>
+            <div class="progress-shell" aria-label="Model load progress"><span id="llm-progress"></span></div>
+            <textarea id="analyst-question" class="code-input small" placeholder="What are the strongest signals in this dataset, and what should I query next?"></textarea>
+            <button class="primary-button full" id="ask-analyst" type="button">Ask local analyst</button>
+            <div class="analyst-answer" id="analyst-answer"><p class="empty-state">The local model's answer appears here.</p></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="education-section section-band">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><span class="kicker">06 · How the system works</span><h2>What each layer is responsible for</h2></div>
+          <p>The architecture deliberately separates computation, statistical reasoning, language understanding and presentation.</p>
+        </div>
+        <div class="education-grid">
+          <article class="panel"><span class="step-chip">CSV</span><h3>Raw observations</h3><p>A CSV is a rectangular dataset: rows are observations; columns are variables. Before analysis, we must infer types, count missing values and understand units.</p></article>
+          <article class="panel"><span class="step-chip">DuckDB-Wasm</span><h3>Deterministic compute</h3><p>DuckDB runs SQL in WebAssembly. Filtering, grouping, descriptive statistics and reproducible queries happen here—not inside the language model.</p></article>
+          <article class="panel"><span class="step-chip">Statistics</span><h3>Evidence & uncertainty</h3><p>Means, quantiles, dispersion, correlation and regression summarize patterns. They describe the observed sample; causal claims require stronger design and assumptions.</p></article>
+          <article class="panel"><span class="step-chip">Transformers.js</span><h3>Semantic navigation</h3><p>Embeddings map text into a vector space so conceptually related questions and schema descriptions can be compared numerically.</p></article>
+          <article class="panel"><span class="step-chip">WebLLM</span><h3>Natural-language reasoning</h3><p>The local LLM translates evidence into explanations and next-step questions. It is useful for interpretation, but deterministic SQL remains the source of numeric truth.</p></article>
+          <article class="panel"><span class="step-chip">D3 + ECharts</span><h3>Visual explanation</h3><p>D3 draws the architecture graph; ECharts renders interactive analytical views. Visualization is a diagnostic tool, not decoration.</p></article>
+        </div>
+        <article class="panel engineering-notes">
+          <span class="panel-number">Engineering decisions</span>
+          <div class="engineering-grid">
+            <div><strong>Progressive enhancement</strong><p>CSV + SQL + statistics work without WebGPU. AI features are opt-in because model downloads and GPU requirements are materially heavier.</p></div>
+            <div><strong>Privacy by architecture</strong><p>The app has no analysis backend. Data context is assembled locally and supplied only to a model executing in the same browser session.</p></div>
+            <div><strong>Guardrails against hallucination</strong><p>The LLM receives bounded evidence and is told to label unsupported ideas as hypotheses. Numbers should be reproduced with SQL.</p></div>
+            <div><strong>GitHub Pages compatible</strong><p>Everything is static HTML, CSS and JavaScript. Heavy runtimes are loaded from public package/model hosts at runtime.</p></div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <noscript><div class="noscript">JavaScript is required for DuckDB-Wasm and the in-browser AI runtimes.</div></noscript>
+</body>
+</html>
