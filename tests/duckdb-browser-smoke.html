@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>DuckDB Browser Smoke Test</title>
+</head>
+<body>
+  <output id="status">DUCKDB_SMOKE_PENDING</output>
+  <script type="module">
+    const status = document.getElementById('status');
+    let workerUrl = '';
+
+    try {
+      const duckdb = await import('https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.32.0/+esm');
+      const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+      if (!bundle?.mainWorker || !bundle?.mainModule) {
+        throw new Error('No compatible DuckDB browser bundle selected');
+      }
+
+      workerUrl = URL.createObjectURL(new Blob([
+        `importScripts("${bundle.mainWorker}");`,
+      ], { type: 'text/javascript' }));
+
+      const worker = new Worker(workerUrl);
+      const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      const conn = await db.connect();
+      const result = await conn.query('SELECT 42 AS answer');
+      const answer = Number(result.toArray()[0]?.answer);
+
+      if (answer !== 42) throw new Error(`Unexpected SQL result: ${answer}`);
+
+      status.textContent = 'DUCKDB_SMOKE_OK';
+      await conn.close();
+      await db.terminate();
+    } catch (error) {
+      console.error(error);
+      status.textContent = `DUCKDB_SMOKE_ERROR: ${error?.message || error}`;
+    } finally {
+      if (workerUrl) URL.revokeObjectURL(workerUrl);
+    }
+  </script>
+</body>
+</html>
