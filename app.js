@@ -1,6 +1,7 @@
 import { describe, pearson, linearRegression, histogram, cosineSimilarity } from './lib/stats.js';
 
-const DUCKDB_MODULE = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.1/+esm';
+const DUCKDB_VERSION = '1.32.0';
+const DUCKDB_MODULE = `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${DUCKDB_VERSION}/+esm`;
 const TRANSFORMERS_MODULE = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm';
 const WEBLLM_MODULE = 'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/+esm';
 const EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2';
@@ -16,20 +17,32 @@ function setStatus(id,text,kind=''){const el=$(id);if(!el)return;el.textContent=
 function renderMath(root=document.body){ if(window.renderMathInElement) window.renderMathInElement(root,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false},{left:'\\[',right:'\\]',display:true}],throwOnError:false}); }
 
 async function initDuckDB(){
+  let workerUrl='';
   try{
-    setStatus('duck-status','Loading…');
+    setStatus('duck-status',`Loading ${DUCKDB_VERSION}…`);
     const duckdb=await import(DUCKDB_MODULE);
     const bundles=duckdb.getJsDelivrBundles();
     const bundle=await duckdb.selectBundle(bundles);
-    const workerUrl=URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`],{type:'text/javascript'}));
+    if(!bundle?.mainWorker||!bundle?.mainModule)throw new Error('DuckDB could not select a compatible browser bundle.');
+    workerUrl=URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`],{type:'text/javascript'}));
     const worker=new Worker(workerUrl);
-    const logger=new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
+    const logger=new duckdb.ConsoleLogger();
     state.db=new duckdb.AsyncDuckDB(logger,worker);
     await state.db.instantiate(bundle.mainModule,bundle.pthreadWorker);
     state.conn=await state.db.connect();
-    URL.revokeObjectURL(workerUrl);
-    setStatus('duck-status','Ready','ok');
-  }catch(error){console.error(error);setStatus('duck-status','Unavailable','error');setStatus('data-status',`DuckDB failed to initialize: ${error.message}`,'error')}
+    const smoke=await state.conn.query('SELECT 42 AS answer');
+    if(Number(safe(smoke.toArray()[0]?.answer))!==42)throw new Error('DuckDB initialized but failed its SQL smoke test.');
+    setStatus('duck-status',`Ready · ${DUCKDB_VERSION}`,'ok');
+  }catch(error){
+    console.error('DuckDB initialization failed',error);
+    try{await state.conn?.close?.()}catch{}
+    try{await state.db?.terminate?.()}catch{}
+    state.conn=null;state.db=null;
+    setStatus('duck-status','Unavailable','error');
+    setStatus('data-status',`DuckDB failed to initialize: ${error.message}`,'error');
+  }finally{
+    if(workerUrl)URL.revokeObjectURL(workerUrl);
+  }
 }
 
 function detectWebGPU(){const ok=Boolean(navigator.gpu);setStatus('gpu-status',ok?'Available':'Not available',ok?'ok':'warn');if(!ok)setStatus('llm-status','Needs WebGPU','warn')}
