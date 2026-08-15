@@ -24,6 +24,28 @@ jobs:
           node-version: 22
       - name: Validate JavaScript and statistics
         run: npm run check
+      - name: Verify pinned DuckDB-Wasm module exists
+        run: |
+          curl --fail --silent --show-error --location \
+            'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.32.0/+esm' \
+            --output /tmp/duckdb-browser.mjs
+          test -s /tmp/duckdb-browser.mjs
+      - name: Smoke test DuckDB in headless Chrome
+        run: |
+          python3 -m http.server 8000 --bind 127.0.0.1 >/tmp/local-ai-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID' EXIT
+          sleep 2
+          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$CHROME"
+          "$CHROME" \
+            --headless \
+            --no-sandbox \
+            --disable-dev-shm-usage \
+            --virtual-time-budget=20000 \
+            --dump-dom \
+            http://127.0.0.1:8000/ >/tmp/local-ai-dom.html
+          grep -q 'Ready · 1.32.0' /tmp/local-ai-dom.html
 
   deploy:
     needs: test
