@@ -42,10 +42,15 @@ jobs:
             --headless \
             --no-sandbox \
             --disable-dev-shm-usage \
-            --virtual-time-budget=20000 \
+            --virtual-time-budget=60000 \
             --dump-dom \
-            http://127.0.0.1:8000/ >/tmp/local-ai-dom.html
-          grep -q 'Ready · 1.32.0' /tmp/local-ai-dom.html
+            http://127.0.0.1:8000/tests/duckdb-browser-smoke.html \
+            >/tmp/duckdb-smoke-dom.html
+          if ! grep -q 'DUCKDB_SMOKE_OK' /tmp/duckdb-smoke-dom.html; then
+            echo 'DuckDB browser smoke test did not reach OK state.'
+            grep -o 'DUCKDB_SMOKE_[^<]*' /tmp/duckdb-smoke-dom.html || true
+            exit 1
+          fi
 
   deploy:
     needs: test
