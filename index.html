@@ -173,6 +173,7 @@
           <label>Primary numeric variable<select id="stats-column"><option value="">Load data first</option></select></label>
           <label>Compare with<select id="compare-column"><option value="">Load data first</option></select></label>
         </div>
+        <p class="status-line stats-status" id="stats-status">Load data to calculate univariate statistics. Comparison is optional.</p>
         <div class="stats-grid" id="stats-grid">
           <article class="panel math-card"><span class="math-label">Mean</span><div class="math-formula">\(\bar{x}=\frac{1}{n}\sum_{i=1}^{n}x_i\)</div><strong id="stat-mean">—</strong><p>The arithmetic centre. Sensitive to extreme values.</p></article>
           <article class="panel math-card"><span class="math-label">Sample standard deviation</span><div class="math-formula">\(s=\sqrt{\frac{\sum (x_i-\bar{x})^2}{n-1}}\)</div><strong id="stat-sd">—</strong><p>Typical spread around the sample mean, using Bessel's correction.</p></article>
@@ -211,6 +212,7 @@
             <div class="panel__header"><div><span class="panel-number">05A</span><h3>Semantic schema search</h3></div><span class="badge">Transformers.js</span></div>
             <p class="panel-copy">Example: “Which fields can explain returns?” Embeddings convert the question and column descriptions into vectors, then cosine similarity ranks the closest schema concepts.</p>
             <div class="math-formula math-inline">\(\cos(\theta)=\frac{\mathbf{q}\cdot\mathbf{c}}{\lVert\mathbf{q}\rVert\lVert\mathbf{c}\rVert}\)</div>
+            <div class="suggestion-block"><span>Suggested from this dataset</span><div id="semantic-suggestions" class="suggested-questions"><p class="empty-state">Load data to generate relevant questions.</p></div></div>
             <textarea id="semantic-question" class="code-input small" placeholder="Which columns might explain return rate?"></textarea>
             <div class="button-row"><button class="secondary-button" id="load-embeddings" type="button">Load embedding model</button><button class="primary-button" id="semantic-search" type="button">Find relevant columns</button></div>
             <div id="semantic-results" class="semantic-results"><p class="empty-state">Embedding results appear here.</p></div>
@@ -222,6 +224,7 @@
             <label class="field-label">Model<select id="llm-model"><option value="SmolLM2-360M-Instruct-q4f32_1-MLC">SmolLM2 360M · lightweight</option><option value="Llama-3.2-1B-Instruct-q4f32_1-MLC">Llama 3.2 1B · larger</option></select></label>
             <button class="secondary-button full" id="load-llm" type="button">Load local model</button>
             <div class="progress-shell" aria-label="Model load progress"><span id="llm-progress"></span></div>
+            <div class="suggestion-block"><span>Suggested from this dataset</span><div id="analyst-suggestions" class="suggested-questions"><p class="empty-state">Load data to generate relevant questions.</p></div></div>
             <textarea id="analyst-question" class="code-input small" placeholder="What are the strongest signals in this dataset, and what should I query next?"></textarea>
             <button class="primary-button full" id="ask-analyst" type="button">Ask local analyst</button>
             <div class="analyst-answer" id="analyst-answer"><p class="empty-state">The local model's answer appears here.</p></div>

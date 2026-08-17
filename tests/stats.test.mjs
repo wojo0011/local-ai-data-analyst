@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mean,variance,standardDeviation,pearson,linearRegression,iqrBounds,outliers,histogram,cosineSimilarity} from '../lib/stats.js';
+import {cleanNumbers,mean,variance,standardDeviation,pearson,linearRegression,iqrBounds,outliers,histogram,cosineSimilarity} from '../lib/stats.js';
 const close=(a,b,e=1e-10)=>assert.ok(Math.abs(a-b)<e,`${a} ≠ ${b}`);
 test('descriptive statistics are correct',()=>{close(mean([1,2,3,4,5]),3);close(variance([1,2,3,4,5]),2.5);close(standardDeviation([1,2,3,4,5]),Math.sqrt(2.5))});
 test('Pearson correlation handles perfect linear relationships',()=>{close(pearson([1,2,3,4],[2,4,6,8]),1);close(pearson([1,2,3,4],[8,6,4,2]),-1)});
 test('OLS recovers a known line',()=>{const r=linearRegression([1,2,3,4],[5,8,11,14]);close(r.slope,3);close(r.intercept,2);close(r.r2,1)});
 test('IQR fences identify a clear extreme',()=>{const b=iqrBounds([1,2,2,3,3,4,100]);assert.ok(b.upper<100);assert.deepEqual(outliers([1,2,2,3,3,4,100]),[100])});
 test('histogram conserves observations and cosine similarity is bounded',()=>{const h=histogram([1,2,3,4,5,6],3);assert.equal(h.reduce((s,b)=>s+b.count,0),6);close(cosineSimilarity([1,0],[1,0]),1);close(cosineSimilarity([1,0],[0,1]),0)});
+test('numeric cleaning does not convert blanks or nulls into zero',()=>{assert.deepEqual(cleanNumbers([null,undefined,'','  ','12.5','bad',0]),[12.5,0]);assert.ok(Number.isNaN(standardDeviation([42])))});
+test('paired statistics discard incomplete values instead of inventing zeroes',()=>{close(pearson([1,null,3],[2,999,6]),1);const r=linearRegression([1,'',3],[2,999,6]);close(r.slope,2);close(r.intercept,0)});

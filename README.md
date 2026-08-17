@@ -29,6 +29,8 @@ The project intentionally keeps **deterministic computation separate from langua
 - CSV upload, drag/drop, pasted CSV, and a clearly labelled synthetic retail demo dataset
 - DuckDB-Wasm schema inference, profiling, missingness, cardinality and read-only SQL lab
 - Descriptive statistics, quartiles/IQR, outlier diagnostics, Pearson correlation and OLS regression
+- Explicit univariate mode plus optional two-variable comparison; the primary variable cannot compare with itself
+- Dataset-aware suggested questions generated locally from detected dates, categories, measures, missingness and sample values
 - KaTeX equations using the same math-library family used by BrowserML Studio
 - ECharts scatter, line, grouped-bar and histogram views
 - D3 architecture visualization
@@ -76,7 +78,7 @@ npm test
 npm run check
 ```
 
-The unit tests validate descriptive statistics, sample variance/standard deviation, Pearson correlation, OLS regression, IQR outlier bounds, histogram conservation and cosine similarity.
+The unit tests validate descriptive statistics, missing-value handling, sample variance/standard deviation, Pearson correlation, OLS regression, IQR outlier bounds, histogram conservation, cosine similarity, semantic column descriptions and dataset-aware question inference.
 
 ## Browser/runtime notes
 

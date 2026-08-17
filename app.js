@@ -1,4 +1,5 @@
 import { describe, pearson, linearRegression, histogram, cosineSimilarity } from './lib/stats.js';
+import { buildColumnDescription, inferDatasetQuestions } from './lib/schema.js';
 
 const DUCKDB_VERSION = '1.32.0';
 const DUCKDB_MODULE = `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${DUCKDB_VERSION}/+esm`;
@@ -6,7 +7,7 @@ const TRANSFORMERS_MODULE = 'https://cdn.jsdelivr.net/npm/@huggingface/transform
 const WEBLLM_MODULE = 'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/+esm';
 const EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2';
 
-const state = { db:null, conn:null, rows:[], columns:[], numeric:[], sourceName:'', lastQuery:[], embedder:null, llm:null };
+const state = { db:null, conn:null, rows:[], columns:[], numeric:[], profiles:{}, questions:{semantic:[],analyst:[]}, sourceName:'', lastQuery:[], embedder:null, llm:null, statsRequest:0 };
 const $ = id => document.getElementById(id);
 const safe = value => value == null ? '' : (typeof value === 'bigint' ? Number(value) : value);
 const fmt = (value, digits=3) => Number.isFinite(value) ? Intl.NumberFormat('en-CA',{maximumFractionDigits:digits}).format(value) : '—';
@@ -68,6 +69,7 @@ async function profileDataset(){
   state.columns=schema.map(r=>({name:r.column_name ?? r.column ?? Object.values(r)[0],type:r.column_type ?? r.type ?? Object.values(r)[1]}));
   const numericPattern=/(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|FLOAT|DOUBLE|DECIMAL|REAL)/i;
   state.numeric=state.columns.filter(c=>numericPattern.test(c.type)).map(c=>c.name);
+  state.profiles={};
   const count=await state.conn.query('SELECT COUNT(*) AS n FROM data');
   const rowCount=Number(safe(count.toArray()[0].n));
   const missingExpressions=state.columns.map(c=>`SUM(CASE WHEN ${quote(c.name)} IS NULL THEN 1 ELSE 0 END) AS ${quote(c.name)}`).join(',');
@@ -78,7 +80,7 @@ async function profileDataset(){
   state.rows=preview.toArray().map(r=>Object.fromEntries(Object.entries(r).map(([k,v])=>[k,safe(v)])));
   $('dataset-name').textContent=state.sourceName;
   $('dataset-metrics').innerHTML=`<div class="metric"><span>Rows</span><strong>${fmt(rowCount,0)}</strong><small>observations</small></div><div class="metric"><span>Columns</span><strong>${state.columns.length}</strong><small>variables</small></div><div class="metric"><span>Numeric</span><strong>${state.numeric.length}</strong><small>quantitative</small></div><div class="metric"><span>Missing</span><strong>${fmt(totalMissing,0)}</strong><small>cells</small></div>`;
-  await renderSchema(misses,rowCount); renderTable('preview-table',state.rows); populateSelectors(); updateStats(); renderDefaultChart();
+  await renderSchema(misses,rowCount); renderTable('preview-table',state.rows); populateSelectors(); renderSuggestedQuestions(); await updateStats(); renderDefaultChart();
 }
 
 async function renderSchema(misses,rowCount){
@@ -87,6 +89,8 @@ async function renderSchema(misses,rowCount){
     let cardinality='—',example='';
     try{const q=await state.conn.query(`SELECT COUNT(DISTINCT ${quote(col.name)}) AS n, MIN(CAST(${quote(col.name)} AS VARCHAR)) AS example FROM data`);const r=q.toArray()[0];cardinality=fmt(Number(safe(r.n)),0);example=safe(r.example)??''}catch{}
     const missing=Number(safe(misses[col.name])||0),pct=rowCount?missing/rowCount*100:0;
+    const examples=[...new Set(state.rows.map(row=>safe(row[col.name])).filter(value=>value!==''&&value!=null).map(String))].slice(0,3);
+    state.profiles[col.name]={missing,missingPercent:pct,cardinality:Number(String(cardinality).replaceAll(',','')),examples,role:state.numeric.includes(col.name)?'Numeric measure':/DATE|TIME/i.test(col.type)?'Date or time dimension':'Categorical or descriptive dimension'};
     const row=document.createElement('div');row.className='schema-item';row.innerHTML=`<code>${escapeHtml(col.name)}</code><span>${escapeHtml(col.type)}</span><span>${fmt(pct,1)}% missing</span><span>${cardinality} unique · ${escapeHtml(example)}</span>`;target.append(row);
   }
 }
@@ -94,20 +98,67 @@ async function renderSchema(misses,rowCount){
 function renderTable(id,rows){const table=$(id);if(!rows?.length){table.innerHTML='<tbody><tr><td class="empty-cell">No rows returned.</td></tr></tbody>';return}const cols=Object.keys(rows[0]);table.innerHTML=`<thead><tr>${cols.map(c=>`<th>${escapeHtml(c)}</th>`).join('')}</tr></thead><tbody>${rows.slice(0,100).map(r=>`<tr>${cols.map(c=>`<td>${escapeHtml(safe(r[c]))}</td>`).join('')}</tr>`).join('')}</tbody>`}
 
 function populateSelectors(){
-  const allOptions=state.columns.map(c=>`<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)} · ${escapeHtml(c.type)}</option>`).join('');
-  const numOptions=state.numeric.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-  ['chart-x'].forEach(id=>$(id).innerHTML=allOptions||'<option value="">No columns</option>');
-  ['stats-column','compare-column','chart-y'].forEach(id=>$(id).innerHTML=numOptions||'<option value="">No numeric columns</option>');
+  setSelectOptions('chart-x',state.columns.map(c=>({value:c.name,label:`${c.name} · ${c.type}`})),'No columns');
+  setSelectOptions('stats-column',state.numeric.map(name=>({value:name,label:name})),'No numeric columns');
+  setSelectOptions('chart-y',state.numeric.map(name=>({value:name,label:name})),'No numeric columns');
   if(state.numeric[0]){$('stats-column').value=state.numeric[0];$('chart-y').value=state.numeric[Math.min(1,state.numeric.length-1)]||state.numeric[0]}
-  if(state.numeric[1])$('compare-column').value=state.numeric[1];
+  syncCompareOptions();
   const dateLike=state.columns.find(c=>/DATE|TIME/i.test(c.type))?.name ?? state.columns[0]?.name;
   if(dateLike)$('chart-x').value=dateLike;
 }
 
-async function columnValues(name){if(!name)return[];const q=await state.conn.query(`SELECT ${quote(name)} AS v FROM data WHERE ${quote(name)} IS NOT NULL LIMIT 250000`);return q.toArray().map(r=>Number(safe(r.v))).filter(Number.isFinite)}
-async function pairedValues(x,y){const q=await state.conn.query(`SELECT ${quote(x)} AS x,${quote(y)} AS y FROM data WHERE ${quote(x)} IS NOT NULL AND ${quote(y)} IS NOT NULL LIMIT 250000`);const rows=q.toArray();return {x:rows.map(r=>Number(safe(r.x))),y:rows.map(r=>Number(safe(r.y)))}}
+function setSelectOptions(id,options,emptyLabel){
+  const select=$(id);select.replaceChildren();
+  if(!options.length){select.add(new Option(emptyLabel,''));return}
+  options.forEach(option=>select.add(new Option(option.label,option.value)));
+}
 
-async function updateStats(){const xName=$('stats-column').value,yName=$('compare-column').value;if(!xName)return;const x=await columnValues(xName),d=describe(x);$('stat-mean').textContent=fmt(d.mean);$('stat-sd').textContent=fmt(d.sd);$('stat-median').textContent=fmt(d.median);$('stat-outliers').textContent=`${fmt(d.outliers,0)} flagged`;if(yName&&yName!==xName){const p=await pairedValues(xName,yName),r=pearson(p.x,p.y),reg=linearRegression(p.x,p.y);$('stat-correlation').textContent=`r = ${fmt(r)}`;$('stat-regression').textContent=`β₁ ${fmt(reg.slope)} · R² ${fmt(reg.r2)}`}else{$('stat-correlation').textContent='Choose 2 variables';$('stat-regression').textContent='Choose 2 variables'}}
+function syncCompareOptions(){
+  const select=$('compare-column'),primary=$('stats-column').value,previous=select.value;
+  const options=[{value:'',label:'No comparison · univariate'},...state.numeric.filter(name=>name!==primary).map(name=>({value:name,label:name}))];
+  setSelectOptions('compare-column',options,'No comparison · univariate');
+  select.value=options.some(option=>option.value===previous)?previous:'';
+}
+
+async function columnValues(name){if(!name)return[];const q=await state.conn.query(`SELECT v FROM (SELECT TRY_CAST(${quote(name)} AS DOUBLE) AS v FROM data) WHERE v IS NOT NULL AND isfinite(v) LIMIT 250000`);return q.toArray().map(r=>Number(safe(r.v))).filter(Number.isFinite)}
+async function pairedValues(x,y){const q=await state.conn.query(`SELECT x,y FROM (SELECT TRY_CAST(${quote(x)} AS DOUBLE) AS x,TRY_CAST(${quote(y)} AS DOUBLE) AS y FROM data) WHERE x IS NOT NULL AND y IS NOT NULL AND isfinite(x) AND isfinite(y) LIMIT 250000`);const rows=q.toArray();return {x:rows.map(r=>Number(safe(r.x))).filter(Number.isFinite),y:rows.map(r=>Number(safe(r.y))).filter(Number.isFinite)}}
+
+async function updateStats(){
+  const request=++state.statsRequest,xName=$('stats-column').value,yName=$('compare-column').value;
+  if(!xName){setStatus('stats-status','No numeric variables were detected.','warn');return}
+  setStatus('stats-status',`Calculating ${xName}…`);
+  try{
+    const x=await columnValues(xName);if(request!==state.statsRequest)return;const d=describe(x);
+    $('stat-mean').textContent=d.n?fmt(d.mean):'No numeric values';
+    $('stat-sd').textContent=d.n>1?fmt(d.sd):d.n===1?'Needs 2+ values':'No numeric values';
+    $('stat-median').textContent=d.n?fmt(d.median):'No numeric values';
+    $('stat-outliers').textContent=d.n?`${fmt(d.outliers,0)} flagged`:'No numeric values';
+    if(yName){
+      const p=await pairedValues(xName,yName);if(request!==state.statsRequest)return;
+      const r=pearson(p.x,p.y),reg=linearRegression(p.x,p.y);
+      $('stat-correlation').textContent=Number.isFinite(r)?`r = ${fmt(r)}`:p.x.length<2?'Needs 2+ pairs':'Undefined · zero variance';
+      $('stat-regression').textContent=Number.isFinite(reg.slope)?`β₁ ${fmt(reg.slope)} · R² ${fmt(reg.r2)}`:p.x.length<2?'Needs 2+ pairs':'Undefined · zero variance';
+      setStatus('stats-status',`${xName}: ${fmt(d.n,0)} valid values · compared with ${yName} using ${fmt(p.x.length,0)} complete pairs.`,'ok');
+    }else{
+      $('stat-correlation').textContent='Comparison off';$('stat-regression').textContent='Comparison off';
+      setStatus('stats-status',`${xName}: ${fmt(d.n,0)} valid numeric values · univariate analysis.`,'ok');
+    }
+  }catch(error){console.error(error);setStatus('stats-status',`Statistics could not be calculated: ${error.message}`,'error')}
+}
+
+function renderQuestionButtons(id,questions,targetId){
+  const root=$(id);root.replaceChildren();
+  if(!questions.length){root.innerHTML='<p class="empty-state">Load data to generate relevant questions.</p>';return}
+  questions.forEach(question=>{const button=document.createElement('button');button.type='button';button.className='question-chip';button.textContent=question;button.addEventListener('click',()=>{$(targetId).value=question;$(targetId).focus()});root.append(button)});
+}
+
+function renderSuggestedQuestions(){
+  state.questions=inferDatasetQuestions({columns:state.columns,numeric:state.numeric,profiles:state.profiles,sourceName:state.sourceName});
+  renderQuestionButtons('semantic-suggestions',state.questions.semantic,'semantic-question');
+  renderQuestionButtons('analyst-suggestions',state.questions.analyst,'analyst-question');
+  if(!$('semantic-question').value.trim())$('semantic-question').value=state.questions.semantic[0]||'';
+  if(!$('analyst-question').value.trim())$('analyst-question').value=state.questions.analyst[0]||'';
+}
 
 function isReadOnlySQL(sql){const cleaned=sql.trim().replace(/^--.*$/gm,'').trim().toUpperCase();return /^(SELECT|WITH|DESCRIBE|SUMMARIZE|EXPLAIN|SHOW)\b/.test(cleaned)&&!/(\bCOPY\b|\bEXPORT\b|\bIMPORT\b|\bINSTALL\b|\bLOAD\b|\bATTACH\b|\bDETACH\b|\bCREATE\b|\bDROP\b|\bALTER\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bCALL\b|\bPRAGMA\b)/.test(cleaned)}
 async function runSQL(){const sql=$('sql-editor').value;if(!state.conn){setStatus('sql-status','DuckDB is not ready.','warn');return}if(!isReadOnlySQL(sql)){setStatus('sql-status','For privacy/safety, the lab accepts read-only analytical SQL only.','warn');return}const started=performance.now();try{const q=await state.conn.query(sql);state.lastQuery=q.toArray().map(r=>Object.fromEntries(Object.entries(r).map(([k,v])=>[k,safe(v)])));renderTable('sql-table',state.lastQuery);$('query-time').textContent=`${Math.round(performance.now()-started)} ms`;setStatus('sql-status',`${state.lastQuery.length} row(s) shown.`,'ok')}catch(error){console.error(error);setStatus('sql-status',error.message,'error')}}
@@ -126,12 +177,12 @@ function renderPipeline(){if(!window.d3)return;const svg=d3.select('#pipeline-gr
 
 async function loadEmbeddings(){if(state.embedder)return;setStatus('embedding-status','Loading…');try{const {pipeline,env}=await import(TRANSFORMERS_MODULE);env.allowLocalModels=false;state.embedder=await pipeline('feature-extraction',EMBEDDING_MODEL,{dtype:'q8'});setStatus('embedding-status','Ready','ok')}catch(error){console.error(error);setStatus('embedding-status','Failed','error');throw error}}
 async function embedding(text){const output=await state.embedder(text,{pooling:'mean',normalize:true});return Array.from(output.data)}
-async function semanticSearch(){if(!state.columns.length){$('semantic-results').innerHTML='<p class="empty-state">Load a dataset first.</p>';return}try{await loadEmbeddings();const question=$('semantic-question').value.trim()||'Which columns are most useful for explaining performance?';setStatus('embedding-status','Computing…');const q=await embedding(question);const results=[];for(const c of state.columns){const text=`Column ${c.name}. DuckDB type ${c.type}. A variable in the current dataset.`;const v=await embedding(text);results.push({name:c.name,type:c.type,score:cosineSimilarity(q,v)})}results.sort((a,b)=>b.score-a.score);$('semantic-results').innerHTML=results.slice(0,6).map(r=>`<div class="semantic-hit"><div><strong>${escapeHtml(r.name)}</strong><small>${escapeHtml(r.type)}</small></div><span>${fmt(r.score,3)}</span></div>`).join('');setStatus('embedding-status','Ready','ok')}catch(error){$('semantic-results').innerHTML=`<p class="empty-state">Embedding model error: ${escapeHtml(error.message)}</p>`}}
+async function semanticSearch(){if(!state.columns.length){$('semantic-results').innerHTML='<p class="empty-state">Load a dataset first.</p>';return}try{await loadEmbeddings();const question=$('semantic-question').value.trim()||state.questions.semantic[0]||'Which columns are most useful for explaining performance?';setStatus('embedding-status','Computing…');const q=await embedding(question);const results=[];for(const c of state.columns){const text=buildColumnDescription(c,state.profiles[c.name]);const v=await embedding(text);results.push({name:c.name,type:c.type,score:cosineSimilarity(q,v)})}results.sort((a,b)=>b.score-a.score);$('semantic-results').innerHTML=results.slice(0,6).map(r=>`<div class="semantic-hit"><div><strong>${escapeHtml(r.name)}</strong><small>${escapeHtml(r.type)}</small></div><span>${fmt(r.score,3)}</span></div>`).join('');setStatus('embedding-status','Ready','ok')}catch(error){$('semantic-results').innerHTML=`<p class="empty-state">Embedding model error: ${escapeHtml(error.message)}</p>`}}
 
 async function loadLLM(){if(state.llm)return;if(!navigator.gpu){setStatus('llm-status','WebGPU unavailable','error');return}setStatus('llm-status','Loading…');try{const webllm=await import(WEBLLM_MODULE);const preferred=$('llm-model').value;const available=webllm.prebuiltAppConfig?.model_list?.map(m=>m.model_id)||[];let model=available.includes(preferred)?preferred:available.find(id=>/SmolLM2.*360M.*Instruct/i.test(id))||available.find(id=>/1B.*Instruct/i.test(id))||available[0];if(!model)throw new Error('No prebuilt WebLLM model was found.');$('llm-model').innerHTML=available.slice(0,30).map(id=>`<option value="${escapeHtml(id)}" ${id===model?'selected':''}>${escapeHtml(id)}</option>`).join('');state.llm=await webllm.CreateMLCEngine(model,{initProgressCallback:report=>{const p=Math.max(0,Math.min(1,report.progress||0));$('llm-progress').style.width=`${p*100}%`;setStatus('llm-status',`${Math.round(p*100)}%`)}});setStatus('llm-status','Ready','ok')}catch(error){console.error(error);setStatus('llm-status','Failed','error');$('analyst-answer').textContent=`WebLLM could not load: ${error.message}`}}
 
-async function buildEvidenceContext(){const schema=state.columns.map(c=>`${c.name} (${c.type})`).join(', ');const summaries=[];for(const name of state.numeric.slice(0,10)){const d=describe(await columnValues(name));summaries.push(`${name}: n=${d.n}, mean=${fmt(d.mean)}, median=${fmt(d.median)}, sd=${fmt(d.sd)}, min=${fmt(d.min)}, max=${fmt(d.max)}, IQR-outliers=${d.outliers}`)}const recent=state.lastQuery.length?JSON.stringify(state.lastQuery.slice(0,15)): 'No SQL query has been run yet.';return `Dataset: ${state.sourceName}\nSchema: ${schema}\nNumeric summaries:\n${summaries.join('\n')}\nRecent SQL result: ${recent}\nSmall preview: ${JSON.stringify(state.rows.slice(0,8))}`}
-async function askAnalyst(){if(!state.columns.length){$('analyst-answer').textContent='Load a dataset first.';return}await loadLLM();if(!state.llm)return;const question=$('analyst-question').value.trim()||'What are the strongest signals in this dataset, and what should I query next?';$('analyst-answer').textContent='Analyzing local evidence…';try{const context=await buildEvidenceContext();const response=await state.llm.chat.completions.create({messages:[{role:'system',content:'You are a careful local data analyst. Use only the evidence provided. Never invent unavailable numbers. Separate observed evidence from hypotheses. Correlation is not causation. Recommend reproducible SQL or statistical checks for claims. Keep the response concise and educational.'},{role:'user',content:`${context}\n\nQuestion: ${question}`}],temperature:.2,max_tokens:700});$('analyst-answer').textContent=response.choices?.[0]?.message?.content||'No response returned.'}catch(error){console.error(error);$('analyst-answer').textContent=`Local analyst error: ${error.message}`}}
+async function buildEvidenceContext(){const schema=state.columns.map(c=>buildColumnDescription(c,state.profiles[c.name])).join('\n');const summaries=[];for(const name of state.numeric.slice(0,10)){const d=describe(await columnValues(name));summaries.push(`${name}: n=${d.n}, mean=${fmt(d.mean)}, median=${fmt(d.median)}, sd=${fmt(d.sd)}, min=${fmt(d.min)}, max=${fmt(d.max)}, IQR-outliers=${d.outliers}`)}const recent=state.lastQuery.length?JSON.stringify(state.lastQuery.slice(0,15)): 'No SQL query has been run yet.';return `Dataset: ${state.sourceName}\nSchema profiles:\n${schema}\nNumeric summaries:\n${summaries.join('\n')}\nData-specific questions:\n${state.questions.analyst.join('\n')}\nRecent SQL result: ${recent}\nSmall preview: ${JSON.stringify(state.rows.slice(0,8))}`}
+async function askAnalyst(){if(!state.columns.length){$('analyst-answer').textContent='Load a dataset first.';return}await loadLLM();if(!state.llm)return;const question=$('analyst-question').value.trim()||state.questions.analyst[0]||'What are the strongest signals in this dataset, and what should I query next?';$('analyst-answer').textContent='Analyzing local evidence…';try{const context=await buildEvidenceContext();const response=await state.llm.chat.completions.create({messages:[{role:'system',content:'You are a careful local data analyst. Use only the evidence provided. Never invent unavailable numbers. Separate observed evidence from hypotheses. Correlation is not causation. Recommend reproducible SQL or statistical checks for claims. Keep the response concise and educational.'},{role:'user',content:`${context}\n\nQuestion: ${question}`}],temperature:.2,max_tokens:700});$('analyst-answer').textContent=response.choices?.[0]?.message?.content||'No response returned.'}catch(error){console.error(error);$('analyst-answer').textContent=`Local analyst error: ${error.message}`}}
 
 function toggleTheme(){const next=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=next;try{localStorage.setItem('vis_mode',next)}catch{};renderPipeline();renderChart()}
 function bindEvents(){
@@ -140,7 +191,7 @@ function bindEvents(){
   $('csv-file').addEventListener('change',async e=>{const f=e.target.files?.[0];if(f)loadCSVText(await f.text(),f.name)});$('load-paste').addEventListener('click',()=>loadCSVText($('csv-paste').value,'Pasted CSV'));
   const dz=$('dropzone');['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('dragover')}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('dragover')}));dz.addEventListener('drop',async e=>{const f=e.dataTransfer.files?.[0];if(f)loadCSVText(await f.text(),f.name)});
   $('run-sql').addEventListener('click',runSQL);document.querySelectorAll('[data-sql-template]').forEach(b=>b.addEventListener('click',()=>{$('sql-editor').value=sqlTemplate(b.dataset.sqlTemplate)}));
-  $('stats-column').addEventListener('change',updateStats);$('compare-column').addEventListener('change',updateStats);$('render-chart').addEventListener('click',renderChart);$('chart-type').addEventListener('change',renderChart);$('load-embeddings').addEventListener('click',loadEmbeddings);$('semantic-search').addEventListener('click',semanticSearch);$('load-llm').addEventListener('click',loadLLM);$('ask-analyst').addEventListener('click',askAnalyst);window.addEventListener('resize',()=>{renderPipeline();const c=echarts.getInstanceByDom($('main-chart'));c?.resize()});
+  $('stats-column').addEventListener('change',()=>{syncCompareOptions();updateStats()});$('compare-column').addEventListener('change',updateStats);$('render-chart').addEventListener('click',renderChart);$('chart-type').addEventListener('change',renderChart);$('load-embeddings').addEventListener('click',loadEmbeddings);$('semantic-search').addEventListener('click',semanticSearch);$('load-llm').addEventListener('click',loadLLM);$('ask-analyst').addEventListener('click',askAnalyst);window.addEventListener('resize',()=>{renderPipeline();const c=echarts.getInstanceByDom($('main-chart'));c?.resize()});
 }
 
 async function boot(){detectWebGPU();bindEvents();renderMath();renderPipeline();await initDuckDB();window.siteLoader?.setProgress?.(88,'Preparing analyst workspace');window.siteLoader?.appReady?.()}
