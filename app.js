@@ -1,5 +1,5 @@
-import { describe, pearson, linearRegression, histogram, cosineSimilarity } from './lib/stats.js';
-import { buildColumnDescription, inferDatasetQuestions } from './lib/schema.js';
+import { describe, pearson, linearRegression, histogram, cosineSimilarity } from './lib/stats.js?v=20260817-1';
+import { buildColumnDescription, inferDatasetQuestions } from './lib/schema.js?v=20260817-1';
 
 const DUCKDB_VERSION = '1.32.0';
 const DUCKDB_MODULE = `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${DUCKDB_VERSION}/+esm`;
