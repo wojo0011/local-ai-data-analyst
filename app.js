@@ -1,5 +1,5 @@
-import { describe, pearson, linearRegression, histogram, cosineSimilarity } from './lib/stats.js?v=20260817-1';
-import { buildColumnDescription, inferDatasetQuestions } from './lib/schema.js?v=20260817-1';
+import { histogram, cosineSimilarity } from './lib/stats.js?v=20260817-2';
+import { buildColumnDescription, inferDatasetQuestions } from './lib/schema.js?v=20260817-2';
 
 const DUCKDB_VERSION = '1.32.0';
 const DUCKDB_MODULE = `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${DUCKDB_VERSION}/+esm`;
@@ -121,29 +121,69 @@ function syncCompareOptions(){
 }
 
 async function columnValues(name){if(!name)return[];const q=await state.conn.query(`SELECT v FROM (SELECT TRY_CAST(${quote(name)} AS DOUBLE) AS v FROM data) WHERE v IS NOT NULL AND isfinite(v) LIMIT 250000`);return q.toArray().map(r=>Number(safe(r.v))).filter(Number.isFinite)}
-async function pairedValues(x,y){const q=await state.conn.query(`SELECT x,y FROM (SELECT TRY_CAST(${quote(x)} AS DOUBLE) AS x,TRY_CAST(${quote(y)} AS DOUBLE) AS y FROM data) WHERE x IS NOT NULL AND y IS NOT NULL AND isfinite(x) AND isfinite(y) LIMIT 250000`);const rows=q.toArray();return {x:rows.map(r=>Number(safe(r.x))).filter(Number.isFinite),y:rows.map(r=>Number(safe(r.y))).filter(Number.isFinite)}}
+const numberOrNaN=value=>{if(value==null||value==='')return NaN;const number=Number(safe(value));return Number.isFinite(number)?number:NaN};
+
+async function summarizeColumn(name){
+  const result=await state.conn.query(`
+    WITH valid AS (
+      SELECT v
+      FROM (SELECT TRY_CAST(${quote(name)} AS DOUBLE) AS v FROM data)
+      WHERE v IS NOT NULL AND isfinite(v)
+    ), quartiles AS (
+      SELECT quantile_cont(v, 0.25) AS q1, quantile_cont(v, 0.75) AS q3
+      FROM valid
+    ), summary AS (
+      SELECT COUNT(*) AS n, AVG(v) AS mean, MEDIAN(v) AS median,
+             STDDEV_SAMP(v) AS sd, MIN(v) AS min, MAX(v) AS max
+      FROM valid
+    )
+    SELECT summary.*, quartiles.q1, quartiles.q3,
+      (SELECT COUNT(*) FROM valid, quartiles
+       WHERE v < q1 - 1.5 * (q3 - q1) OR v > q3 + 1.5 * (q3 - q1)) AS outliers
+    FROM summary CROSS JOIN quartiles
+  `);
+  const row=result.toArray()[0]||{};
+  return {n:Number(safe(row.n)||0),mean:numberOrNaN(row.mean),median:numberOrNaN(row.median),sd:numberOrNaN(row.sd),min:numberOrNaN(row.min),max:numberOrNaN(row.max),q1:numberOrNaN(row.q1),q3:numberOrNaN(row.q3),outliers:Number(safe(row.outliers)||0)};
+}
+
+async function summarizePair(xName,yName){
+  const result=await state.conn.query(`
+    WITH valid AS (
+      SELECT x, y FROM (
+        SELECT TRY_CAST(${quote(xName)} AS DOUBLE) AS x,
+               TRY_CAST(${quote(yName)} AS DOUBLE) AS y
+        FROM data
+      )
+      WHERE x IS NOT NULL AND y IS NOT NULL AND isfinite(x) AND isfinite(y)
+    )
+    SELECT COUNT(*) AS n, corr(x, y) AS correlation,
+           regr_slope(y, x) AS slope, regr_r2(y, x) AS r2
+    FROM valid
+  `);
+  const row=result.toArray()[0]||{};
+  return {n:Number(safe(row.n)||0),correlation:numberOrNaN(row.correlation),slope:numberOrNaN(row.slope),r2:numberOrNaN(row.r2)};
+}
 
 async function updateStats(){
   const request=++state.statsRequest,xName=$('stats-column').value,yName=$('compare-column').value;
   if(!xName){setStatus('stats-status','No numeric variables were detected.','warn');return}
   setStatus('stats-status',`Calculating ${xName}…`);
   try{
-    const x=await columnValues(xName);if(request!==state.statsRequest)return;const d=describe(x);
+    const d=await summarizeColumn(xName);if(request!==state.statsRequest)return;
     $('stat-mean').textContent=d.n?fmt(d.mean):'No numeric values';
     $('stat-sd').textContent=d.n>1?fmt(d.sd):d.n===1?'Needs 2+ values':'No numeric values';
     $('stat-median').textContent=d.n?fmt(d.median):'No numeric values';
     $('stat-outliers').textContent=d.n?`${fmt(d.outliers,0)} flagged`:'No numeric values';
     if(yName){
-      const p=await pairedValues(xName,yName);if(request!==state.statsRequest)return;
-      const r=pearson(p.x,p.y),reg=linearRegression(p.x,p.y);
-      $('stat-correlation').textContent=Number.isFinite(r)?`r = ${fmt(r)}`:p.x.length<2?'Needs 2+ pairs':'Undefined · zero variance';
-      $('stat-regression').textContent=Number.isFinite(reg.slope)?`β₁ ${fmt(reg.slope)} · R² ${fmt(reg.r2)}`:p.x.length<2?'Needs 2+ pairs':'Undefined · zero variance';
-      setStatus('stats-status',`${xName}: ${fmt(d.n,0)} valid values · compared with ${yName} using ${fmt(p.x.length,0)} complete pairs.`,'ok');
+      const pair=await summarizePair(xName,yName);if(request!==state.statsRequest)return;
+      $('stat-correlation').textContent=Number.isFinite(pair.correlation)?`r = ${fmt(pair.correlation)}`:pair.n<2?'Needs 2+ pairs':'Undefined · zero variance';
+      $('stat-regression').textContent=Number.isFinite(pair.slope)?`β₁ ${fmt(pair.slope)} · R² ${fmt(pair.r2)}`:pair.n<2?'Needs 2+ pairs':'Undefined · zero variance';
+      setStatus('stats-status',`${xName}: ${fmt(d.n,0)} valid values · compared with ${yName} using ${fmt(pair.n,0)} complete pairs.`,'ok');
     }else{
       $('stat-correlation').textContent='Comparison off';$('stat-regression').textContent='Comparison off';
       setStatus('stats-status',`${xName}: ${fmt(d.n,0)} valid numeric values · univariate analysis.`,'ok');
     }
-  }catch(error){console.error(error);setStatus('stats-status',`Statistics could not be calculated: ${error.message}`,'error')}
+  }catch(error){console.error(error);['stat-mean','stat-sd','stat-median','stat-outliers','stat-correlation','stat-regression'].forEach(id=>$(id).textContent='Unavailable');setStatus('stats-status',`Statistics could not be calculated: ${error.message}`,'error')}
 }
 
 function renderQuestionButtons(id,questions,targetId){
@@ -181,7 +221,7 @@ async function semanticSearch(){if(!state.columns.length){$('semantic-results').
 
 async function loadLLM(){if(state.llm)return;if(!navigator.gpu){setStatus('llm-status','WebGPU unavailable','error');return}setStatus('llm-status','Loading…');try{const webllm=await import(WEBLLM_MODULE);const preferred=$('llm-model').value;const available=webllm.prebuiltAppConfig?.model_list?.map(m=>m.model_id)||[];let model=available.includes(preferred)?preferred:available.find(id=>/SmolLM2.*360M.*Instruct/i.test(id))||available.find(id=>/1B.*Instruct/i.test(id))||available[0];if(!model)throw new Error('No prebuilt WebLLM model was found.');$('llm-model').innerHTML=available.slice(0,30).map(id=>`<option value="${escapeHtml(id)}" ${id===model?'selected':''}>${escapeHtml(id)}</option>`).join('');state.llm=await webllm.CreateMLCEngine(model,{initProgressCallback:report=>{const p=Math.max(0,Math.min(1,report.progress||0));$('llm-progress').style.width=`${p*100}%`;setStatus('llm-status',`${Math.round(p*100)}%`)}});setStatus('llm-status','Ready','ok')}catch(error){console.error(error);setStatus('llm-status','Failed','error');$('analyst-answer').textContent=`WebLLM could not load: ${error.message}`}}
 
-async function buildEvidenceContext(){const schema=state.columns.map(c=>buildColumnDescription(c,state.profiles[c.name])).join('\n');const summaries=[];for(const name of state.numeric.slice(0,10)){const d=describe(await columnValues(name));summaries.push(`${name}: n=${d.n}, mean=${fmt(d.mean)}, median=${fmt(d.median)}, sd=${fmt(d.sd)}, min=${fmt(d.min)}, max=${fmt(d.max)}, IQR-outliers=${d.outliers}`)}const recent=state.lastQuery.length?JSON.stringify(state.lastQuery.slice(0,15)): 'No SQL query has been run yet.';return `Dataset: ${state.sourceName}\nSchema profiles:\n${schema}\nNumeric summaries:\n${summaries.join('\n')}\nData-specific questions:\n${state.questions.analyst.join('\n')}\nRecent SQL result: ${recent}\nSmall preview: ${JSON.stringify(state.rows.slice(0,8))}`}
+async function buildEvidenceContext(){const schema=state.columns.map(c=>buildColumnDescription(c,state.profiles[c.name])).join('\n');const summaries=[];for(const name of state.numeric.slice(0,10)){const d=await summarizeColumn(name);summaries.push(`${name}: n=${d.n}, mean=${fmt(d.mean)}, median=${fmt(d.median)}, sd=${fmt(d.sd)}, min=${fmt(d.min)}, max=${fmt(d.max)}, IQR-outliers=${d.outliers}`)}const recent=state.lastQuery.length?JSON.stringify(state.lastQuery.slice(0,15)): 'No SQL query has been run yet.';return `Dataset: ${state.sourceName}\nSchema profiles:\n${schema}\nNumeric summaries:\n${summaries.join('\n')}\nData-specific questions:\n${state.questions.analyst.join('\n')}\nRecent SQL result: ${recent}\nSmall preview: ${JSON.stringify(state.rows.slice(0,8))}`}
 async function askAnalyst(){if(!state.columns.length){$('analyst-answer').textContent='Load a dataset first.';return}await loadLLM();if(!state.llm)return;const question=$('analyst-question').value.trim()||state.questions.analyst[0]||'What are the strongest signals in this dataset, and what should I query next?';$('analyst-answer').textContent='Analyzing local evidence…';try{const context=await buildEvidenceContext();const response=await state.llm.chat.completions.create({messages:[{role:'system',content:'You are a careful local data analyst. Use only the evidence provided. Never invent unavailable numbers. Separate observed evidence from hypotheses. Correlation is not causation. Recommend reproducible SQL or statistical checks for claims. Keep the response concise and educational.'},{role:'user',content:`${context}\n\nQuestion: ${question}`}],temperature:.2,max_tokens:700});$('analyst-answer').textContent=response.choices?.[0]?.message?.content||'No response returned.'}catch(error){console.error(error);$('analyst-answer').textContent=`Local analyst error: ${error.message}`}}
 
 function toggleTheme(){const next=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=next;try{localStorage.setItem('vis_mode',next)}catch{};renderPipeline();renderChart()}
